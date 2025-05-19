@@ -3,69 +3,87 @@ import pandas as pd
 import random
 import os
 import io
-from sklearn.preprocessing import LabelEncoder
 
 # Load MovieLens data
 @st.cache_data
 def load_data():
-    movies = pd.read_csv(r"C:/Users/Acer/Desktop/ss/movies.csv")
-    ratings = pd.read_csv(r"C:/Users/Acer/Desktop/ss/ratings.csv")
+    movies = pd.read_csv("C:/Users/Acer/Desktop/ss/movies.csv")
+    ratings = pd.read_csv("C:/Users/Acer/Desktop/ss/ratings.csv")
     return movies, ratings
 
-# Genetic algorithm to generate recommendations (simulated)
-def genetic_algorithm(user_preferences, movies_df, ratings_df):
-    if user_preferences:
-        recommended_movies = movies_df[movies_df['genres'].str.contains('|'.join(user_preferences), case=False, na=False)]
+# Extract top genres based on user's highly-rated movies
+def get_user_preferences(user_id, movies_df, ratings_df, min_rating=4):
+    try:
+        user_id = int(user_id)
+    except:
+        return []
+
+    user_rated = ratings_df[(ratings_df['userId'] == user_id) & (ratings_df['rating'] >= min_rating)]
+    merged = pd.merge(user_rated, movies_df, on='movieId')
+
+    genre_counts = {}
+    for genres in merged['genres']:
+        for genre in genres.split('|'):
+            genre_counts[genre] = genre_counts.get(genre, 0) + 1
+
+    sorted_genres = sorted(genre_counts.items(), key=lambda x: x[1], reverse=True)
+    top_genres = [genre for genre, _ in sorted_genres[:3]]  # Top 3 preferred genres
+
+    return top_genres
+
+# Simplified Genetic Algorithm to simulate recommendation optimization
+def genetic_algorithm(user_id, movies_df, ratings_df):
+    preferences = get_user_preferences(user_id, movies_df, ratings_df)
+
+    if preferences:
+        population = movies_df[movies_df['genres'].str.contains('|'.join(preferences), case=False, na=False)]
     else:
-        recommended_movies = movies_df
+        population = movies_df.copy()
 
-    if recommended_movies.empty:
-        recommended_movies = movies_df.sample(10)
+    if population.empty:
+        population = movies_df.sample(10)
 
-    top_movies = recommended_movies.sample(10)
-    return top_movies
+    # Simulate "evolution" of recommendation strategies
+    for _ in range(3):  # Number of generations
+        population['fitness'] = population['genres'].apply(lambda g: sum(g.count(p) for p in preferences))
+        population = population.sort_values(by='fitness', ascending=False).head(50)
+        mutated = population.sample(10).copy()
+        mutated['title'] = mutated['title'].sample(frac=1).values  # Simulate mutation
+        population = pd.concat([population, mutated], ignore_index=True)
 
-# User interface
+    final_selection = population.drop_duplicates('movieId').sample(min(10, len(population)))
+    return final_selection
+
+# Streamlit user interface
 def main():
     st.title("🎬 Personalized Movie Recommendation System")
     st.subheader("Optimizing movie recommendation strategies using Genetic Programming")
 
     movies_df, ratings_df = load_data()
 
-    # Sidebar
-    st.sidebar.header("🎯 Select Your Preferences")
+    st.sidebar.header("🎯 User Configuration")
     user_id = st.sidebar.text_input("Enter your User ID", "")
-    genre_preferences = st.sidebar.multiselect("Select genres you're interested in:",
-                                               ['Action', 'Comedy', 'Drama', 'Romance', 'Horror', 'Adventure', 'Sci-Fi', 'Thriller'])
-    rating_threshold = st.sidebar.slider("Minimum movie rating preference:", 1, 5, 3)
+    rating_threshold = st.sidebar.slider("Minimum rating to consider a movie favorite:", 1, 5, 4)
 
-    # Session state to store recommendations
     if 'top_movies' not in st.session_state:
         st.session_state.top_movies = pd.DataFrame()
 
-    # Generate recommendations
     if st.sidebar.button("🎥 Generate Recommendations"):
         if user_id.strip():
             st.markdown(f"## 🎁 Recommendations for user **{user_id}**")
-            st.session_state.top_movies = genetic_algorithm(genre_preferences, movies_df, ratings_df)
+            st.session_state.top_movies = genetic_algorithm(user_id, movies_df, ratings_df)
 
             for _, movie in st.session_state.top_movies.iterrows():
                 cols = st.columns([1, 4])
                 with cols[0]:
-                    if 'poster_path' in movie and pd.notna(movie['poster_path']):
-                        st.image(f"https://image.tmdb.org/t/p/w500/{movie['poster_path']}", width=100)
-                    else:
-                        st.write("📷 No poster")
-
+                    st.write("📷 No poster")
                 with cols[1]:
                     st.markdown(f"**{movie['title']}**")
-                    st.markdown(f"⭐ Rating: {random.uniform(rating_threshold, 5):.1f}")
                     st.markdown(f"🎭 Genres: {movie['genres']}")
                     st.markdown("---")
         else:
             st.error("⚠️ Please enter your User ID first.")
 
-    # Save recommendations
     if st.button("💾 Save Recommendations"):
         if not user_id.strip():
             st.error("❗ Please enter your User ID to save recommendations.")
@@ -77,7 +95,6 @@ def main():
             st.success(f"✅ Recommendations saved to **{filename}**")
             st.write(f"📁 File location: `{os.path.abspath(filename)}`")
 
-            # Download button
             csv_buffer = io.StringIO()
             st.session_state.top_movies.to_csv(csv_buffer, index=False)
             st.download_button(
